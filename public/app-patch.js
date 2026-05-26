@@ -14,4 +14,18 @@
   document.addEventListener('click',e=>{const card=e.target.closest('.schedule-row-wrap');if(!card||e.target.closest('button,a,input,textarea'))return;const box=card.querySelector('.expanded-day');if(box&&box.id){e.preventDefault();window.toggleDay(box.id.replace('day-',''))}});
   const mo=new MutationObserver(()=>{const menu=document.querySelector('#userMenu .row');if(menu&&!menu.querySelector('.guest-lock-button')){const b=document.createElement('button');b.textContent='Guest mode';b.className='guest-lock-button';b.onclick=showGuestLock;menu.insertBefore(b,menu.lastElementChild)}});
   mo.observe(document.body,{childList:true,subtree:true});
+  let lastRefresh=0;
+  async function softRefresh(reason){
+    if(localStorage.getItem('wt_guest_lock')==='1') return;
+    if(document.hidden && reason!=='visible') return;
+    if(typeof window.load!=='function') return;
+    const now=Date.now();
+    if(now-lastRefresh<45000 && reason!=='visible') return;
+    lastRefresh=now;
+    try{await window.load()}catch{}
+  }
+  setInterval(()=>softRefresh('timer'),60000);
+  setInterval(()=>{if(localStorage.getItem('wt_guest_lock')==='1')showGuestLock()},900000);
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)softRefresh('visible')});
+  window.addEventListener('focus',()=>softRefresh('visible'));
 })();
