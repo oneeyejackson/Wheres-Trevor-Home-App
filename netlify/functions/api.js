@@ -8,7 +8,7 @@ const HOME_TZ = "America/Los_Angeles";
 const AUTH_STORE = "wt-auth";
 const DAYSHEET_STORE = "wt-daysheets";
 
-function env(name) { return Netlify.env.get(name); }
+function env(name) { return process.env[name] || (globalThis.Netlify?.env?.get ? Netlify.env.get(name) : undefined); }
 function authStore() { return getStore(AUTH_STORE, { consistency: "strong" }); }
 function daysheetStore() { return getStore(DAYSHEET_STORE, { consistency: "strong" }); }
 function nowSeconds() { return Math.floor(Date.now() / 1000); }
@@ -104,7 +104,7 @@ async function handleSetup(request) {
   const adminUsername = cleanUsername(input.adminUsername); const viewerUsername = cleanUsername(input.viewerUsername); const guestUsername = cleanUsername(input.guestUsername || "guest");
   const names = [adminUsername, viewerUsername, guestUsername]; if (names.some(n => n.length < 3) || new Set(names).size !== names.length) return json({ error: "Use three unique usernames, at least 3 characters each." }, 400);
   if ([input.adminPassword, input.viewerPassword, input.guestPassword].some(p => String(p || "").length < 12)) return json({ error: "All passwords must be at least 12 characters." }, 400);
-  const pin = String(input.guestExitPin || "").trim(); if (!/^\d{4,8}$/.test(pin)) return json({ error: "Guest exit PIN must be 4–8 numbers." }, 400);
+  const pin = String(input.guestExitPin || "").trim(); if (!/^\d{4,8}$/.test(pin)) return json({ error: "Guest exit PIN must be 4-8 numbers." }, 400);
   const weatherSettings = { label: String(input.weatherLabel || "Altadena, CA").slice(0,80), latitude: Number(input.weatherLatitude) || 34.1897, longitude: Number(input.weatherLongitude) || -118.1312 };
   await saveSettings({ version: 1, createdAt: new Date().toISOString(), weather: weatherSettings, guestExitPin: passwordRecord(pin), users: [
     { username: adminUsername, displayName: "Trevor", role: "admin", password: passwordRecord(input.adminPassword) },
