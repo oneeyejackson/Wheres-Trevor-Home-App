@@ -12,8 +12,8 @@ const json = (body, status = 200) => new Response(JSON.stringify(body), {
 });
 const clean = (value, max = 140) => String(value || "").replace(/[\u0000-\u001f]/g, " ").trim().slice(0, max);
 const env = (name) => process.env[name] || (globalThis.Netlify?.env?.get ? Netlify.env.get(name) : undefined);
+const pad = (n) => String(n).padStart(2, "0");
 const fmtDate = (date) => new Intl.DateTimeFormat("en-CA", { timeZone: HOME_TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
-const timeLabel = (date) => new Intl.DateTimeFormat("en-US", { timeZone: HOME_TZ, hour: "numeric", minute: "2-digit" }).format(date);
 const dayName = (date) => new Intl.DateTimeFormat("en-US", { timeZone: HOME_TZ, weekday: "long", month: "short", day: "numeric" }).format(date);
 const addDays = (date, days) => new Date(date.getTime() + days * 86400000);
 const normalizeCalendarUrl = (url) => {
@@ -27,15 +27,32 @@ async function authorized(request) {
   const status = await res.json();
   return ["admin", "viewer"].includes(status?.session?.role);
 }
-function eventRecord(ev, dt, bucket, nowMs) {
-  const js = dt.toJSDate();
-  const allDay = Boolean(ev.startDate?.isDate);
-  const sort = allDay ? new Date(`${fmtDate(js)}T00:00:00`).getTime() : js.getTime();
+function localKeyFromICAL(dt) {
+  if (!dt) return "";
+  return `${dt.year}-${pad(dt.month)}-${pad(dt.day)}`;
+}
+function laMinutesNow() {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: HOME_TZ, hour: "numeric", minute: "numeric", hour12: false }).formatToParts(new Date());
+  const h = Number(parts.find(p => p.type === "hour")?.value || 0);
+  const m = Number(parts.find(p => p.type === "minute")?.value || 0);
+  return h * 60 + m;
+}
+function timeLabel(dt) {
+  if (dt?.isDate) return "All day";
+  const h = Number(dt.hour || 0);
+  const m = Number(dt.minute || 0);
+  const suffix = h >= 12 ? "PM" : "AM";
+  const hour = h % 12 || 12;
+  return `${hour}:${pad(m)} ${suffix}`;
+}
+function eventRecord(ev, dt, bucket, nowMin) {
+  const allDay = Boolean(dt?.isDate || ev.startDate?.isDate);
+  const sort = allDay ? -1 : Number(dt.hour || 0) * 60 + Number(dt.minute || 0);
   return {
     title: clean(ev.summary || "Calendar event"),
-    time: allDay ? "All day" : timeLabel(js),
+    time: timeLabel(dt),
     sort,
-    passed: bucket === "today" && !allDay && sort < nowMs
+    passed: bucket === "today" && !allDay && sort < nowMin
   };
 }
 async function readEvents() {
@@ -45,15 +62,16 @@ async function readEvents() {
   const today = fmtDate(now);
   const tomorrowDate = addDays(now, 1);
   const tomorrow = fmtDate(tomorrowDate);
+  const nowMin = laMinutesNow();
   const res = await fetch(url, { headers: { "user-agent": "wheres-trevor-home-app" } });
   if (!res.ok) throw new Error(`iCal fetch failed: ${res.status}`);
   const comp = new ICAL.Component(ICAL.parse(await res.text()));
   const todayEvents = [];
   const tomorrowEvents = [];
   const add = (ev, dt) => {
-    const localDate = fmtDate(dt.toJSDate());
-    if (localDate === today) todayEvents.push(eventRecord(ev, dt, "today", now.getTime()));
-    if (localDate === tomorrow) tomorrowEvents.push(eventRecord(ev, dt, "tomorrow", now.getTime()));
+    const key = localKeyFromICAL(dt);
+    if (key === today) todayEvents.push(eventRecord(ev, dt, "today", nowMin));
+    if (key === tomorrow) tomorrowEvents.push(eventRecord(ev, dt, "tomorrow", nowMin));
   };
   for (const item of comp.getAllSubcomponents("vevent")) {
     const ev = new ICAL.Event(item);
@@ -61,11 +79,11 @@ async function readEvents() {
       const iter = ev.iterator();
       let next;
       let count = 0;
-      while ((next = iter.next()) && count < 1200) {
+      while ((next = iter.next()) && count < 1600) {
         count += 1;
-        const localDate = fmtDate(next.toJSDate());
-        if (localDate > tomorrow) break;
-        if (localDate === today || localDate === tomorrow) add(ev, next);
+        const key = localKeyFromICAL(next);
+        if (key > tomorrow) break;
+        if (key === today || key === tomorrow) add(ev, next);
       }
     } else {
       add(ev, ev.startDate);
