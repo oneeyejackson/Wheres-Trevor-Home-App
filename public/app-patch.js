@@ -28,5 +28,5 @@
   setInterval(()=>{if(localStorage.getItem('wt_guest_lock')==='1')showGuestLock()},900000);
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)softRefresh('visible')});
   window.addEventListener('focus',()=>softRefresh('visible'));
-  const script=document.createElement('script');script.src='/home-final.js';script.defer=true;document.head.appendChild(script);
+  const script=document.createElement('script');script.src='/fix-home.js?v=20260526d';script.defer=true;document.head.appendChild(script);
 })();
