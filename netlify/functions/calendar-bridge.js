@@ -1,32 +1,68 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
+import { getStore } from "@netlify/blobs";
 import ICAL from "ical.js";
 
 const HOME_TZ = "America/Los_Angeles";
-const json = (body, status = 200) => new Response(JSON.stringify(body), {
-  status,
-  headers: {
-    "content-type": "application/json; charset=utf-8",
-    "cache-control": "no-store",
-    "x-content-type-options": "nosniff",
-    "x-robots-tag": "noindex, nofollow, noarchive"
-  }
-});
-const clean = (value, max = 140) => String(value || "").replace(/[\u0000-\u001f]/g, " ").trim().slice(0, max);
+const SESSION_COOKIE = "wt_session";
+const AUTH_STORE = "wt-auth";
+
+const authStore = () => getStore(AUTH_STORE, { consistency: "strong" });
+const nowSeconds = () => Math.floor(Date.now() / 1000);
 const env = (name) => process.env[name] || (globalThis.Netlify?.env?.get ? Netlify.env.get(name) : undefined);
 const pad = (n) => String(n).padStart(2, "0");
 const fmtDate = (date) => new Intl.DateTimeFormat("en-CA", { timeZone: HOME_TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
 const dayName = (date) => new Intl.DateTimeFormat("en-US", { timeZone: HOME_TZ, weekday: "long", month: "short", day: "numeric" }).format(date);
 const addDays = (date, days) => new Date(date.getTime() + days * 86400000);
+const json = (body, status = 200) => new Response(JSON.stringify(body), {
+  status,
+  headers: {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "private, max-age=120",
+    "x-content-type-options": "nosniff",
+    "x-robots-tag": "noindex, nofollow, noarchive"
+  }
+});
+const clean = (value, max = 140) => String(value || "").replace(/[\u0000-\u001f]/g, " ").trim().slice(0, max);
+
+function safeEqual(a = "", b = "") {
+  const A = Buffer.from(String(a));
+  const B = Buffer.from(String(b));
+  return A.length === B.length && timingSafeEqual(A, B);
+}
+function hmac(value, settings) {
+  const secret = settings?.sessionSecret || env("SESSION_SECRET") || "pre-setup-transient-session-secret-not-used-for-login";
+  return createHmac("sha256", secret).update(value).digest("base64url");
+}
+function parseCookies(request) {
+  return Object.fromEntries((request.headers.get("cookie") || "").split(";").map(c => c.trim()).filter(Boolean).map(c => {
+    const [n, ...r] = c.split("=");
+    return [n, decodeURIComponent(r.join("="))];
+  }));
+}
+function readSession(request, settings) {
+  const token = parseCookies(request)[SESSION_COOKIE];
+  if (!token || !token.includes(".")) return null;
+  const [encoded, sig] = token.split(".");
+  if (!safeEqual(sig, hmac(encoded, settings))) return null;
+  try {
+    const p = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+    if (!p.exp || p.exp < nowSeconds()) return null;
+    if (!p.username || !["admin", "viewer", "guest"].includes(p.role)) return null;
+    return p;
+  } catch {
+    return null;
+  }
+}
+async function authorized(request) {
+  const settings = await authStore().get("settings", { type: "json" });
+  const session = readSession(request, settings);
+  return ["admin", "viewer"].includes(session?.role);
+}
+
 const normalizeCalendarUrl = (url) => {
   const value = String(url || "").trim();
   return value.startsWith("webcal://") ? `https://${value.slice("webcal://".length)}` : value;
 };
-async function authorized(request) {
-  const url = new URL(request.url);
-  const res = await fetch(`${url.origin}/api/status`, { headers: { cookie: request.headers.get("cookie") || "" } });
-  if (!res.ok) return false;
-  const status = await res.json();
-  return ["admin", "viewer"].includes(status?.session?.role);
-}
 function localKeyFromICAL(dt) {
   if (!dt) return "";
   return `${dt.year}-${pad(dt.month)}-${pad(dt.day)}`;
@@ -97,6 +133,7 @@ async function readEvents() {
     tomorrow: tomorrowEvents.sort(byTime)
   };
 }
+
 export default async (request) => {
   try {
     if (!(await authorized(request))) return json({ error: "Login required." }, 401);
